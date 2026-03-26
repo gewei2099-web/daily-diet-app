@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { analyzeDailyDiet } from '../utils/dietAnalysis'
-import { getDailyEntryById, saveDailyEntry } from '../utils/storage'
+import { getDailyEntryById, saveDailyEntry, getUserProfile } from '../utils/storage'
 
 export default function DailyDietDetail() {
   const { id } = useParams()
@@ -128,7 +128,11 @@ export default function DailyDietDetail() {
                   }
                   setAiLoading(true)
                   try {
-                    const analysis = await analyzeDailyDiet({ date: entry.date, meals: mealsForAi })
+                    const analysis = await analyzeDailyDiet({
+                      date: entry.date,
+                      meals: mealsForAi,
+                      userProfile: getUserProfile()
+                    })
                     saveDailyEntry({ ...entry, analysis })
                     setMsg({ type: 'ok', text: '重新分析完成' })
                     // 直接刷新页面状态：通过简单重新获取（下一次渲染会读到 localStorage）

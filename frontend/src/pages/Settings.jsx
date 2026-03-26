@@ -2,26 +2,45 @@ import React, { useState, useEffect, useRef } from 'react'
 import {
   getApiConfig,
   saveApiConfig,
-  getGeocodingConfig,
-  saveGeocodingConfig,
-  getAppConfig,
-  saveAppConfig,
   getScoreGradeConfig,
   saveScoreGradeConfig,
+  getUserProfile,
+  saveUserProfile,
+  getFavoriteMeals,
+  saveFavoriteMeals,
+  getSettingsLog,
+  appendSettingsLog,
+  clearSettingsLog,
   exportData,
   importData
 } from '../utils/storage'
-import { searchPlace } from '../utils/geocode'
+import { uuid } from '../utils/uuid'
+
+const MEAL_TYPES = ['早餐', '午餐', '晚餐', '加餐']
+
+function useDebouncedSettingsLog(setLog, message, deps, delay = 1200) {
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) {
+      first.current = false
+      return
+    }
+    const t = setTimeout(() => {
+      const next = appendSettingsLog(message)
+      setLog(next)
+    }, delay)
+    return () => clearTimeout(t)
+  }, deps)
+}
 
 export default function Settings() {
   const [config, setConfig] = useState(getApiConfig())
-  const [geoConfig, setGeoConfig] = useState(getGeocodingConfig())
-  const [appConfig, setAppConfig] = useState(getAppConfig())
   const [scoreGradeConfig, setScoreGradeConfig] = useState(getScoreGradeConfig())
+  const [profile, setProfile] = useState(getUserProfile())
+  const [favorites, setFavorites] = useState(() => getFavoriteMeals())
+  const [settingsLog, setSettingsLog] = useState(() => getSettingsLog())
   const [saved, setSaved] = useState(false)
   const [importMsg, setImportMsg] = useState(null)
-  const [geoTestMsg, setGeoTestMsg] = useState(null)
-  const [geoTestLoading, setGeoTestLoading] = useState(false)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
@@ -39,45 +58,32 @@ export default function Settings() {
   }, [scoreGradeConfig])
 
   useEffect(() => {
-    saveGeocodingConfig(geoConfig)
-  }, [geoConfig])
+    saveUserProfile(profile)
+  }, [profile])
 
   useEffect(() => {
-    saveAppConfig(appConfig)
-  }, [appConfig])
+    saveFavoriteMeals(favorites)
+  }, [favorites])
+
+  useDebouncedSettingsLog(setSettingsLog, 'LLM 配置已更新', [config.apiKey, config.baseUrl, config.model])
+  useDebouncedSettingsLog(setSettingsLog, '评分阈值已更新', [scoreGradeConfig.S, scoreGradeConfig.A, scoreGradeConfig.B, scoreGradeConfig.C])
+  useDebouncedSettingsLog(setSettingsLog, '个人体质已更新', [JSON.stringify(profile)])
+  useDebouncedSettingsLog(setSettingsLog, '常用饮食已更新', [JSON.stringify(favorites)])
 
   const update = (k, v) => setConfig(prev => ({ ...prev, [k]: v }))
-  const updateGeo = (k, v) => setGeoConfig(prev => ({ ...prev, [k]: v }))
 
-  const addAppConfigItem = (key, val) => {
-    const v = (val || '').trim()
-    if (!v) return
-    const list = appConfig[key] || []
-    if (list.includes(v)) return
-    setAppConfig(prev => ({ ...prev, [key]: [...list, v] }))
-  }
-  const removeAppConfigItem = (key, idx) => {
-    setAppConfig(prev => ({
-      ...prev,
-      [key]: (prev[key] || []).filter((_, i) => i !== idx)
-    }))
+  const updateProfile = (k, v) => setProfile(prev => ({ ...prev, [k]: v }))
+
+  const addFavorite = () => {
+    setFavorites(prev => [...prev, { id: uuid(), name: '', foodText: '', mealType: '早餐', cost: '' }])
   }
 
-  const handleGeoTest = async () => {
-    setGeoTestMsg(null)
-    setGeoTestLoading(true)
-    try {
-      const list = await searchPlace('北京', 1)
-      if (list.length > 0) {
-        setGeoTestMsg({ type: 'ok', text: `成功：${list[0].display} (${list[0].lat.toFixed(4)}, ${list[0].lng.toFixed(4)})` })
-      } else {
-        setGeoTestMsg({ type: 'warn', text: '无结果（但请求未报错）' })
-      }
-    } catch (err) {
-      setGeoTestMsg({ type: 'error', text: `失败：${err.message}` })
-    } finally {
-      setGeoTestLoading(false)
-    }
+  const updateFavorite = (idx, patch) => {
+    setFavorites(prev => prev.map((f, i) => (i === idx ? { ...f, ...patch } : f)))
+  }
+
+  const removeFavorite = (idx) => {
+    setFavorites(prev => prev.filter((_, i) => i !== idx))
   }
 
   const handleExport = () => {
@@ -90,19 +96,21 @@ export default function Settings() {
     const pad = n => String(n).padStart(2, '0')
     const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
     const timeStr = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-    a.download = `trip-activity-backup-${dateStr}-${timeStr}.json`
+    a.download = `daily-diet-backup-${dateStr}-${timeStr}.json`
     a.click()
     URL.revokeObjectURL(url)
+    const next = appendSettingsLog('已导出数据备份')
+    setSettingsLog(next)
   }
 
-  const handleImport = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const runImport = (file, mode) => {
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const result = importData(reader.result, 'overwrite')
+        const result = importData(reader.result, mode)
         if (result.ok) {
+          const logMsg = mode === 'overwrite' ? '数据：覆盖导入' : '数据：合并导入'
+          appendSettingsLog(logMsg)
           setImportMsg({ type: 'ok', text: '导入成功，请刷新页面' })
           setTimeout(() => window.location.reload(), 1000)
         } else {
@@ -113,31 +121,22 @@ export default function Settings() {
       }
     }
     reader.readAsText(file)
+  }
+
+  const handleImport = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    runImport(file, 'overwrite')
     e.target.value = ''
   }
 
   const handleImportMerge = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const result = importData(reader.result, 'merge')
-        if (result.ok) {
-          setImportMsg({ type: 'ok', text: '合并成功，请刷新页面' })
-          setTimeout(() => window.location.reload(), 1000)
-        } else {
-          setImportMsg({ type: 'error', text: result.error || '导入失败' })
-        }
-      } catch (err) {
-        setImportMsg({ type: 'error', text: err.message || '解析失败' })
-      }
-    }
-    reader.readAsText(file)
+    runImport(file, 'merge')
     e.target.value = ''
   }
 
-  /* BUILD_TIME 由 vite define 在构建时注入 */
   const buildTime = typeof __BUILD_TIME__ !== 'undefined' ? String(__BUILD_TIME__) : ''
 
   return (
@@ -181,7 +180,7 @@ export default function Settings() {
 
       <section style={styles.section}>
         <h2 style={styles.sectionTitle}>评分阈值（可选）</h2>
-        <p style={styles.hint}>用于把分析结果的 `score` 映射到 `grade`。阈值数值越高，对应等级越“严格”。</p>
+        <p style={styles.hint}>用于把分析结果的 score 映射到 grade。数值越高，对应等级越严格。</p>
         <div style={styles.row}>
           <div style={styles.fieldSmall}>
             <label>S（最优）最小分</label>
@@ -225,130 +224,112 @@ export default function Settings() {
       </section>
 
       <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>地点搜索（可选）</h2>
-        <p style={styles.hint}>配置高德/Geoapify Key 可提升地点搜索效果。国内优先高德，海外优先 Geoapify。Key 仅存本机。</p>
-        <div style={styles.field}>
-          <label>使用环境</label>
-          <select value={geoConfig.env ?? 'auto'} onChange={e => updateGeo('env', e.target.value)} style={styles.select}>
-            <option value="auto">自动（按网络检测）</option>
-            <option value="cn">国内优先</option>
-            <option value="intl">海外优先</option>
-          </select>
+        <h2 style={styles.sectionTitle}>个人体质（可选）</h2>
+        <p style={styles.hint}>用于分析时参考大致热量需求与活动水平；非医疗诊断，仅供参考。</p>
+        <div style={styles.row}>
+          <div style={styles.fieldSmall}>
+            <label>体重（kg）</label>
+            <input value={profile.weightKg ?? ''} onChange={e => updateProfile('weightKg', e.target.value)} style={styles.input} placeholder="如 65" />
+          </div>
+          <div style={styles.fieldSmall}>
+            <label>身高（cm）</label>
+            <input value={profile.heightCm ?? ''} onChange={e => updateProfile('heightCm', e.target.value)} style={styles.input} placeholder="如 170" />
+          </div>
+          <div style={styles.fieldSmall}>
+            <label>年龄</label>
+            <input value={profile.age ?? ''} onChange={e => updateProfile('age', e.target.value)} style={styles.input} placeholder="如 30" />
+          </div>
+        </div>
+        <div style={styles.row}>
+          <div style={styles.fieldSmall}>
+            <label>性别</label>
+            <select value={profile.sex ?? ''} onChange={e => updateProfile('sex', e.target.value)} style={styles.select}>
+              <option value="">不填</option>
+              <option value="男">男</option>
+              <option value="女">女</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div style={{ ...styles.fieldSmall, flex: '2 1 280px' }}>
+            <label>日常活动量</label>
+            <select value={profile.activityLevel ?? ''} onChange={e => updateProfile('activityLevel', e.target.value)} style={styles.select}>
+              <option value="">不填</option>
+              <option value="久坐少动">久坐少动</option>
+              <option value="轻度活动">轻度活动</option>
+              <option value="中度活动">中度活动</option>
+              <option value="高强度">高强度</option>
+            </select>
+          </div>
         </div>
         <div style={styles.field}>
-          <label>高德 Key（国内，约 6000 次/天免费）</label>
-          <input
-            type="password"
-            placeholder="在 lbs.amap.com 申请"
-            value={geoConfig.amapKey ?? ''}
-            onChange={e => updateGeo('amapKey', e.target.value)}
-            autoComplete="off"
+          <label>备注（可选）</label>
+          <textarea
+            value={profile.note ?? ''}
+            onChange={e => updateProfile('note', e.target.value)}
+            placeholder="如：减脂期、素食、过敏提示（仍非医疗建议）"
+            style={styles.textarea}
+            rows={3}
           />
-        </div>
-        <div style={styles.field}>
-          <label>高德安全密钥</label>
-          <input
-            type="password"
-            placeholder="Key 开启数字签名时必填"
-            value={geoConfig.amapSecurityKey ?? ''}
-            onChange={e => updateGeo('amapSecurityKey', e.target.value)}
-            autoComplete="off"
-          />
-          <p style={styles.fieldHint}>若在控制台为该 Key 开启了「数字签名」，需在此填写安全密钥</p>
-        </div>
-        <div style={styles.field}>
-          <label>Geoapify Key（海外，约 3000 次/天免费）</label>
-          <input
-            type="password"
-            placeholder="在 myprojects.geoapify.com 申请"
-            value={geoConfig.geoapifyKey ?? ''}
-            onChange={e => updateGeo('geoapifyKey', e.target.value)}
-            autoComplete="off"
-          />
-        </div>
-        <div style={styles.field}>
-          <button type="button" onClick={handleGeoTest} disabled={geoTestLoading} style={styles.btn}>
-            {geoTestLoading ? '测试中…' : '测试地点搜索'}
-          </button>
-          <p style={styles.fieldHint}>使用当前配置搜索「北京」。测试高德请选「国内优先」；测试 Geoapify 请选「海外优先」</p>
-          {geoTestMsg && (
-            <div style={geoTestMsg.type === 'ok' ? styles.msgOk : geoTestMsg.type === 'warn' ? styles.msgWarn : styles.msgErr}>
-              {geoTestMsg.text}
-            </div>
-          )}
         </div>
       </section>
 
       <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>活动类型与物品分类</h2>
-        <p style={styles.hint}>自定义活动类型（如景点、交通）和携带物品分类，用于行程编辑与携带清单。</p>
-        <div style={styles.field}>
-          <label>活动类型</label>
-          <div style={styles.tagRow}>
-            <input
-              placeholder="添加类型，回车确认"
-              value={appConfig.activityInput ?? ''}
-              onChange={e => setAppConfig(prev => ({ ...prev, activityInput: e.target.value }))}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  const v = (appConfig.activityInput ?? '').trim()
-                  if (v && !(appConfig.activityTypes || []).includes(v)) {
-                    setAppConfig(prev => ({ ...prev, activityTypes: [...(prev.activityTypes || []), v], activityInput: '' }))
-                  }
-                }
-              }}
-              style={styles.tagInput}
-            />
-            <button type="button" onClick={() => {
-              const v = (appConfig.activityInput ?? '').trim()
-              if (v && !(appConfig.activityTypes || []).includes(v)) {
-                setAppConfig(prev => ({ ...prev, activityTypes: [...(prev.activityTypes || []), v], activityInput: '' }))
-              }
-            }} style={styles.tagAddBtn}>添加</button>
+        <h2 style={styles.sectionTitle}>常用饮食</h2>
+        <p style={styles.hint}>在「新建/编辑每日饮食」中可一键填入本条餐食的食物描述、餐别与默认费用。</p>
+        {favorites.length === 0 && (
+          <p style={styles.muted}>暂无条目，点击下方按钮添加。</p>
+        )}
+        {favorites.map((f, idx) => (
+          <div key={f.id || idx} style={styles.favCard}>
+            <div style={styles.row}>
+              <div style={styles.fieldSmall}>
+                <label>显示名称</label>
+                <input value={f.name ?? ''} onChange={e => updateFavorite(idx, { name: e.target.value })} style={styles.input} placeholder="如：公司盒饭" />
+              </div>
+              <div style={{ ...styles.fieldSmall, flex: '2 1 240px' }}>
+                <label>食物描述</label>
+                <input value={f.foodText ?? ''} onChange={e => updateFavorite(idx, { foodText: e.target.value })} style={styles.input} placeholder="米饭+青菜+鸡腿…" />
+              </div>
+            </div>
+            <div style={styles.row}>
+              <div style={styles.fieldSmall}>
+                <label>默认餐别</label>
+                <select value={f.mealType || '早餐'} onChange={e => updateFavorite(idx, { mealType: e.target.value })} style={styles.select}>
+                  {MEAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div style={styles.fieldSmall}>
+                <label>默认费用（元）</label>
+                <input type="number" value={f.cost ?? ''} onChange={e => updateFavorite(idx, { cost: e.target.value })} style={styles.input} placeholder="可选" />
+              </div>
+              <div style={{ alignSelf: 'flex-end', marginBottom: 4 }}>
+                <button type="button" onClick={() => removeFavorite(idx)} style={styles.dangerBtn}>删除</button>
+              </div>
+            </div>
           </div>
-          <div style={styles.tagList}>
-            {(appConfig.activityTypes || []).map((t, i) => (
-              <span key={t} style={styles.tag}>
-                {t}
-                <button type="button" onClick={() => setAppConfig(prev => ({ ...prev, activityTypes: (prev.activityTypes || []).filter((_, j) => j !== i) }))} style={styles.tagDel}>×</button>
-              </span>
-            ))}
-          </div>
+        ))}
+        <button type="button" onClick={addFavorite} style={styles.btn}>+ 添加常用饮食</button>
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>配置变更日志</h2>
+        <p style={styles.hint}>上述配置在保存后约 1.2 秒内自动记入（避免每次按键一条）。导入/导出也会记录。</p>
+        <div style={styles.btnRow}>
+          <button type="button" className="secondary" onClick={() => { clearSettingsLog(); setSettingsLog([]) }} style={styles.btn}>
+            清空日志
+          </button>
         </div>
-        <div style={styles.field}>
-          <label>携带物品分类</label>
-          <div style={styles.tagRow}>
-            <input
-              placeholder="添加分类，回车确认"
-              value={appConfig.packingInput ?? ''}
-              onChange={e => setAppConfig(prev => ({ ...prev, packingInput: e.target.value }))}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  const v = (appConfig.packingInput ?? '').trim()
-                  if (v && !(appConfig.packingCategories || []).includes(v)) {
-                    setAppConfig(prev => ({ ...prev, packingCategories: [...(prev.packingCategories || []), v], packingInput: '' }))
-                  }
-                }
-              }}
-              style={styles.tagInput}
-            />
-            <button type="button" onClick={() => {
-              const v = (appConfig.packingInput ?? '').trim()
-              if (v && !(appConfig.packingCategories || []).includes(v)) {
-                setAppConfig(prev => ({ ...prev, packingCategories: [...(prev.packingCategories || []), v], packingInput: '' }))
-              }
-            }} style={styles.tagAddBtn}>添加</button>
-          </div>
-          <div style={styles.tagList}>
-            {(appConfig.packingCategories || []).map((c, i) => (
-              <span key={c} style={styles.tag}>
-                {c}
-                <button type="button" onClick={() => setAppConfig(prev => ({ ...prev, packingCategories: (prev.packingCategories || []).filter((_, j) => j !== i) }))} style={styles.tagDel}>×</button>
-              </span>
-            ))}
-          </div>
+        <div style={styles.logBox}>
+          {settingsLog.length === 0 ? (
+            <div style={styles.muted}>暂无记录</div>
+          ) : (
+            settingsLog.map((row, i) => (
+              <div key={`${row.at}-${i}`} style={styles.logRow}>
+                <span style={styles.logTime}>{String(row.at || '').slice(0, 19).replace('T', ' ')}</span>
+                <span style={styles.logMsg}>{row.message}</span>
+              </div>
+            ))
+          )}
         </div>
       </section>
 
@@ -356,10 +337,11 @@ export default function Settings() {
         <h2 style={styles.sectionTitle}>数据导入/导出</h2>
         <p style={styles.hint}>数据存于本机，换设备需导出后在新设备导入。</p>
         <div style={styles.btnRow}>
-          <button onClick={handleExport} style={styles.btn}>导出 JSON</button>
+          <button type="button" onClick={handleExport} style={styles.btn}>导出 JSON</button>
         </div>
         <div style={styles.btnRow}>
           <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
             className="secondary"
             style={styles.btn}
@@ -374,14 +356,15 @@ export default function Settings() {
             onChange={handleImport}
           />
           <button
-            onClick={() => document.getElementById('import-merge')?.click()}
+            type="button"
+            onClick={() => document.getElementById('import-merge-diet')?.click()}
             className="secondary"
             style={styles.btn}
           >
             合并导入
           </button>
           <input
-            id="import-merge"
+            id="import-merge-diet"
             type="file"
             accept=".json"
             style={{ display: 'none' }}
@@ -405,22 +388,23 @@ const styles = {
   section: { marginBottom: 32 },
   sectionTitle: { fontSize: 16, marginBottom: 8 },
   hint: { fontSize: 14, color: '#666', marginBottom: 12 },
+  muted: { fontSize: 14, color: '#888', marginBottom: 8 },
   field: { marginBottom: 16 },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap' },
+  row: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' },
   select: { width: '100%', padding: '10px 12px', fontSize: 16, borderRadius: 8, border: '1px solid #ddd' },
+  fieldSmall: { flex: '1 1 200px' },
   fieldHint: { fontSize: 12, color: '#888', marginTop: 4 },
-  fieldSmall: { flex: '1 1 220px' },
-  input: { width: '100%', padding: '10px 12px', fontSize: 16, borderRadius: 8, border: '1px solid #ddd' },
-  msgWarn: { color: '#b8860b', fontSize: 14, marginTop: 8 },
+  input: { width: '100%', padding: '10px 12px', fontSize: 16, borderRadius: 8, border: '1px solid #ddd', boxSizing: 'border-box' },
+  textarea: { width: '100%', padding: '10px 12px', fontSize: 15, borderRadius: 8, border: '1px solid #ddd', boxSizing: 'border-box', resize: 'vertical' },
   saved: { color: '#0a0', fontSize: 14, marginBottom: 8 },
   btnRow: { display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 },
   btn: { padding: '10px 16px' },
+  dangerBtn: { padding: '8px 14px', color: '#c00', border: '1px solid #ccc', borderRadius: 8, background: '#fff', cursor: 'pointer' },
   msgOk: { color: '#0a0', fontSize: 14, marginTop: 8 },
   msgErr: { color: '#c00', fontSize: 14, marginTop: 8 },
-  tagRow: { display: 'flex', gap: 8, marginBottom: 8 },
-  tagInput: { flex: 1, minWidth: 0, padding: '10px 12px', fontSize: 15, borderRadius: 8, border: '1px solid #ddd' },
-  tagAddBtn: { padding: '10px 16px', fontSize: 14, whiteSpace: 'nowrap' },
-  tagList: { display: 'flex', flexWrap: 'wrap', gap: 8 },
-  tag: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 12px', background: '#e9ecef', borderRadius: 6, fontSize: 14 },
-  tagDel: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#666', padding: 0, lineHeight: 1 }
+  favCard: { border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, marginBottom: 12, background: '#f8f9fa' },
+  logBox: { maxHeight: 280, overflow: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, background: '#fafafa', fontSize: 13 },
+  logRow: { display: 'flex', gap: 10, flexWrap: 'wrap', padding: '6px 0', borderBottom: '1px solid #eee' },
+  logTime: { color: '#888', fontFamily: 'monospace', flex: '0 0 auto' },
+  logMsg: { color: '#333', flex: '1 1 200px' }
 }

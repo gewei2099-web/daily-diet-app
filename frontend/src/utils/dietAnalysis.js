@@ -38,9 +38,23 @@ function normalizeTotals(totals) {
   return out
 }
 
-export async function analyzeDailyDiet({ date, meals }) {
+function formatUserProfileBlock(userProfile) {
+  const p = userProfile && typeof userProfile === 'object' ? userProfile : {}
+  const lines = []
+  if ((p.weightKg || '').toString().trim()) lines.push(`体重: ${p.weightKg} kg`)
+  if ((p.heightCm || '').toString().trim()) lines.push(`身高: ${p.heightCm} cm`)
+  if ((p.age || '').toString().trim()) lines.push(`年龄: ${p.age}`)
+  if ((p.sex || '').toString().trim()) lines.push(`性别: ${p.sex}`)
+  if ((p.activityLevel || '').toString().trim()) lines.push(`日常活动量: ${p.activityLevel}`)
+  if ((p.note || '').toString().trim()) lines.push(`备注: ${p.note}`)
+  if (lines.length === 0) return '（用户未填写个人体质信息；请按一般成年人作粗略参考。）'
+  return lines.join('\n')
+}
+
+export async function analyzeDailyDiet({ date, meals, userProfile }) {
   const safeMeals = Array.isArray(meals) ? meals : []
   const cfg = getScoreGradeConfig()
+  const profileBlock = formatUserProfileBlock(userProfile)
 
   const mealLines = safeMeals
     .map(m => {
@@ -54,10 +68,15 @@ export async function analyzeDailyDiet({ date, meals }) {
 
   const prompt = `你是一位营养分析助手。用户将提供某一天的“每日饮食条目（按餐/按食物）”。请你估算这一天的总体营养与热量，并从热量合理性与营养均衡性两方面给出一个 0-100 的评分。
 
-评估说明（不需要用户配置个人目标）：\n
-1) 热量合理性：如果总热量明显偏低或偏高，则扣分。\n
+【重要】以下为非医疗场景的日常饮食参考：不得给出疾病诊断或用药建议；若涉及健康风险请提示用户咨询专业人士。
+
+用户体质与活动水平（用于粗略判断当日总热量是否相对合适，可用常见公式如 Mifflin-St Jeor 估算基础代谢再结合活动系数作定性判断，不必展示计算过程）：\n
+${profileBlock}\n
+
+评估说明：\n
+1) 热量合理性：结合上述体质与活动水平，判断当日总热量是否明显偏低/偏高/大致合适（定性即可）。\n
 2) 营养均衡性：关注宏量营养素（蛋白/碳水/脂肪）的相对比例，以及纤维摄入（如可推断）。\n
-3) 你需要输出“关键短板”与“可执行建议”，每个建议尽量可落实到下一天怎么吃。\n
+3) 输出“关键短板”与“可执行建议”，每条建议尽量可落实到下一天怎么吃。\n
 
 要求：\n
 - 只输出严格 JSON（禁止 markdown / 禁止额外文字），JSON 字段如下：\n

@@ -5,12 +5,26 @@ const API_CONFIG_KEY = 'diet_api_config'
 const GEOCODING_CONFIG_KEY = 'diet_geocoding_config'
 const APP_CONFIG_KEY = 'diet_app_config'
 const SCORE_GRADE_CONFIG_KEY = 'diet_score_grade_config'
-const EXPORT_VERSION = 1
+const USER_PROFILE_KEY = 'diet_user_profile'
+const FAVORITE_MEALS_KEY = 'diet_favorite_meals'
+const SETTINGS_LOG_KEY = 'diet_settings_log'
+const EXPORT_VERSION = 2
 
 const DEFAULT_ACTIVITY_TYPES = ['景点', '餐厅', '交通', '住宿', '其他']
 const DEFAULT_PACKING_CATEGORIES = ['证件', '电子', '衣物', '洗漱', '药品', '其他']
 
 const DEFAULT_SCORE_GRADE_CONFIG = { S: 90, A: 80, B: 70, C: 60 }
+
+const DEFAULT_USER_PROFILE = {
+  weightKg: '',
+  heightCm: '',
+  age: '',
+  sex: '',
+  activityLevel: '',
+  note: ''
+}
+
+const MAX_SETTINGS_LOG = 200
 
 // --- Trips ---
 export function getTrips() {
@@ -195,6 +209,67 @@ export function saveScoreGradeConfig(config) {
   return merged
 }
 
+// --- User profile（个人体质，供分析参考）---
+export function getUserProfile() {
+  try {
+    const raw = localStorage.getItem(USER_PROFILE_KEY)
+    if (!raw) return { ...DEFAULT_USER_PROFILE }
+    const parsed = JSON.parse(raw)
+    return { ...DEFAULT_USER_PROFILE, ...parsed }
+  } catch {
+    return { ...DEFAULT_USER_PROFILE }
+  }
+}
+
+export function saveUserProfile(profile) {
+  const merged = { ...DEFAULT_USER_PROFILE, ...(profile || {}) }
+  localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(merged))
+  return merged
+}
+
+// --- Favorite meals（常用饮食）---
+export function getFavoriteMeals() {
+  try {
+    const raw = localStorage.getItem(FAVORITE_MEALS_KEY)
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list : []
+  } catch {
+    return []
+  }
+}
+
+export function saveFavoriteMeals(list) {
+  const arr = Array.isArray(list) ? list : []
+  localStorage.setItem(FAVORITE_MEALS_KEY, JSON.stringify(arr))
+  return arr
+}
+
+// --- Settings change log ---
+export function getSettingsLog() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_LOG_KEY)
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list : []
+  } catch {
+    return []
+  }
+}
+
+export function appendSettingsLog(message) {
+  const msg = (message || '').trim()
+  if (!msg) return getSettingsLog()
+  const list = getSettingsLog()
+  const entry = { at: new Date().toISOString(), message: msg }
+  const next = [entry, ...list].slice(0, MAX_SETTINGS_LOG)
+  localStorage.setItem(SETTINGS_LOG_KEY, JSON.stringify(next))
+  return next
+}
+
+export function clearSettingsLog() {
+  localStorage.setItem(SETTINGS_LOG_KEY, JSON.stringify([]))
+  return []
+}
+
 // --- Import / Export ---
 export function exportData() {
   const data = {
@@ -202,9 +277,10 @@ export function exportData() {
     exportedAt: new Date().toISOString(),
     [TRIPS_KEY]: getTrips(),
     [API_CONFIG_KEY]: getApiConfig(),
-    [GEOCODING_CONFIG_KEY]: getGeocodingConfig(),
-    [APP_CONFIG_KEY]: getAppConfig(),
-    [SCORE_GRADE_CONFIG_KEY]: getScoreGradeConfig()
+    [SCORE_GRADE_CONFIG_KEY]: getScoreGradeConfig(),
+    [USER_PROFILE_KEY]: getUserProfile(),
+    [FAVORITE_MEALS_KEY]: getFavoriteMeals(),
+    [SETTINGS_LOG_KEY]: getSettingsLog()
   }
   return JSON.stringify(data, null, 2)
 }
@@ -220,6 +296,9 @@ export function importData(jsonStr, mode = 'merge') {
     const geocodingConfig = data[GEOCODING_CONFIG_KEY]
     const appConfig = data[APP_CONFIG_KEY]
     const scoreGradeConfig = data[SCORE_GRADE_CONFIG_KEY]
+    const userProfile = data[USER_PROFILE_KEY]
+    const favoriteMeals = data[FAVORITE_MEALS_KEY]
+    const settingsLog = data[SETTINGS_LOG_KEY]
 
     if (mode === 'overwrite') {
       localStorage.setItem(TRIPS_KEY, JSON.stringify(Array.isArray(trips) ? trips : []))
@@ -234,6 +313,15 @@ export function importData(jsonStr, mode = 'merge') {
       }
       if (scoreGradeConfig && typeof scoreGradeConfig === 'object') {
         saveScoreGradeConfig(scoreGradeConfig)
+      }
+      if (userProfile && typeof userProfile === 'object') {
+        saveUserProfile(userProfile)
+      }
+      if (Array.isArray(favoriteMeals)) {
+        saveFavoriteMeals(favoriteMeals)
+      }
+      if (Array.isArray(settingsLog)) {
+        localStorage.setItem(SETTINGS_LOG_KEY, JSON.stringify(settingsLog.slice(0, MAX_SETTINGS_LOG)))
       }
     } else {
       const existingTrips = getTrips()
@@ -259,6 +347,26 @@ export function importData(jsonStr, mode = 'merge') {
       }
       if (scoreGradeConfig && typeof scoreGradeConfig === 'object') {
         saveScoreGradeConfig(scoreGradeConfig)
+      }
+      if (userProfile && typeof userProfile === 'object') {
+        saveUserProfile({ ...getUserProfile(), ...userProfile })
+      }
+      if (Array.isArray(favoriteMeals) && favoriteMeals.length > 0) {
+        const existing = getFavoriteMeals()
+        const ids = new Set(existing.map(x => x.id))
+        const merged = [...existing]
+        favoriteMeals.forEach(x => {
+          if (x?.id && !ids.has(x.id)) {
+            merged.push(x)
+            ids.add(x.id)
+          }
+        })
+        saveFavoriteMeals(merged)
+      }
+      if (Array.isArray(settingsLog) && settingsLog.length > 0) {
+        const cur = getSettingsLog()
+        const mergedLog = [...settingsLog, ...cur].slice(0, MAX_SETTINGS_LOG)
+        localStorage.setItem(SETTINGS_LOG_KEY, JSON.stringify(mergedLog))
       }
     }
 

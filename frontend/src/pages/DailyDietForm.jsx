@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import DateSelect from '../components/DateSelect'
 import TimeSelect from '../components/TimeSelect'
 import { uuid } from '../utils/uuid'
-import { getDailyEntryById, saveDailyEntry } from '../utils/storage'
+import { getDailyEntryById, saveDailyEntry, getFavoriteMeals, getUserProfile } from '../utils/storage'
 import { analyzeDailyDiet } from '../utils/dietAnalysis'
 
 export default function DailyDietForm() {
@@ -27,6 +27,9 @@ export default function DailyDietForm() {
   const [saving, setSaving] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [favPick, setFavPick] = useState({})
+
+  const favorites = getFavoriteMeals()
 
   useEffect(() => {
     if (!id) return
@@ -46,6 +49,25 @@ export default function DailyDietForm() {
     setForm(prev => ({
       ...prev,
       meals: prev.meals.map((m, i) => (i === idx ? { ...m, [k]: v } : m))
+    }))
+  }
+
+  const applyFavoriteToMeal = (mealId) => {
+    const fid = favPick[mealId]
+    if (!fid) return
+    const f = getFavoriteMeals().find(x => x.id === fid)
+    if (!f) return
+    setForm(prev => ({
+      ...prev,
+      meals: prev.meals.map(m => {
+        if (m.id !== mealId) return m
+        return {
+          ...m,
+          foodText: f.foodText != null ? f.foodText : m.foodText,
+          mealType: f.mealType || m.mealType,
+          cost: f.cost !== '' && f.cost != null ? f.cost : m.cost
+        }
+      })
     }))
   }
 
@@ -109,7 +131,11 @@ export default function DailyDietForm() {
       // 先保存 meals，避免分析成功后用户刷新丢失
       saveDailyEntry(entry)
 
-      const analysis = await analyzeDailyDiet({ date: entry.date, meals: mealsForAi })
+      const analysis = await analyzeDailyDiet({
+        date: entry.date,
+        meals: mealsForAi,
+        userProfile: getUserProfile()
+      })
       const updated = { ...entry, analysis }
       saveDailyEntry(updated)
       setForm(prev => ({ ...prev, analysis }))
@@ -143,6 +169,27 @@ export default function DailyDietForm() {
 
         {(form.meals || []).map((m, idx) => (
           <div key={m.id || idx} style={styles.mealCard}>
+            {favorites.length > 0 && (
+              <div style={styles.favRow}>
+                <label style={styles.smallLabel}>常用饮食</label>
+                <div style={styles.favControls}>
+                  <select
+                    value={favPick[m.id] ?? ''}
+                    onChange={e => setFavPick(p => ({ ...p, [m.id]: e.target.value }))}
+                    style={styles.select}
+                  >
+                    <option value="">选择一项…</option>
+                    {favorites.map(f => (
+                      <option key={f.id} value={f.id}>{(f.name || '').trim() || (f.foodText || '').trim() || '未命名'}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => applyFavoriteToMeal(m.id)} style={styles.favBtn}>
+                    填入本条
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div style={styles.mealRow}>
               <div style={{ flex: 1, minWidth: 120 }}>
                 <label style={styles.smallLabel}>类型</label>
@@ -230,6 +277,9 @@ const styles = {
   sectionTitle: { fontSize: 16, marginBottom: 8, fontWeight: 600 },
   hint: { fontSize: 13, color: '#666', marginBottom: 16, lineHeight: 1.5 },
   mealCard: { border: '1px solid #e5e7eb', background: '#f8f9fa', borderRadius: 12, padding: 14, marginBottom: 14 },
+  favRow: { marginBottom: 12 },
+  favControls: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' },
+  favBtn: { padding: '10px 14px', fontSize: 14, borderRadius: 8, border: '1px solid #0d7377', background: '#fff', color: '#0d7377', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' },
   mealRow: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start', marginBottom: 12 },
   smallLabel: { fontSize: 13, color: '#555', marginBottom: 6, fontWeight: 600, display: 'block' },
   input: { width: '100%', padding: '12px 14px', fontSize: 16, borderRadius: 8, border: '1px solid #ddd', minHeight: 44, background: '#fff', boxSizing: 'border-box' },
