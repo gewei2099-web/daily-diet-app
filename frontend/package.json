@@ -1,0 +1,28 @@
+{
+  "name": "daily-diet-frontend",
+  "version": "1.0.0",
+  "type": "module",
+  "overrides": {
+    "serialize-javascript": ">=7.0.3"
+  },
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "build:pages": "set BUILD_PAGES=1 && vite build --outDir ../docs",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4",
+    "leaflet-polylinedecorator": "^1.6.0",
+    "md5": "^2.3.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-leaflet": "^4.2.1",
+    "react-router-dom": "^6.21.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.0",
+    "vite-plugin-pwa": "^0.17.4"
+  }
+}
